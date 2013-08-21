@@ -5,6 +5,7 @@ import urlparse
 import sys
 import os
 from threading import *
+import ssl
 
 # FLAGS PARA DEBUG
 
@@ -18,7 +19,7 @@ DEBUG_FLAG = False
 # endereco do site
 IMPRIME_CABECALHO = False
 
-NTHREADS = 8
+NTHREADS = 1
 BLOCO = 2048
 
 def SinalizaErro():
@@ -100,6 +101,8 @@ def CriaDiretorios(host, path, criar):
 
 def Busca(url, prof_atual):
 
+	#print "Passei [-1]"
+
 	global lista_por_visitar
 
 	houve_erro = False
@@ -122,25 +125,45 @@ def Busca(url, prof_atual):
 	lock.acquire()
 	if not (addr in lista_visitados):
 
+		#print "Passei [0]"
+
 		lista_visitados.append(addr)
 		lock.release()
 
 		scheme = parse.scheme
+
+		if scheme == "https":
+			https = True
+		else:
+			https = False
+
 		msg = scheme + '://' + host + path + ', ' + str(prof_atual) + '\n'
 
 		if not path:
 			path = '/'
 
-		# Inicia a comunicacao, envia a requisicao e recebe o cabecalho
-		# mais o inicio do conteudo, se houver
-		try:
-			s = socket.create_connection((host, port), 10)
-			s.send("GET " + path + " HTTP/1.1\r\nHost: "+ host + "\r\n\r\n")
-			strg = s.recv(BLOCO)
-		
-		except socket.error:
-			msg += SinalizaErro()
-			houve_erro = True
+		#print "Passei [1]"
+
+		if https:
+			s = socket.socket()
+			ss = ssl.wrap_socket(s, ca_certs="ca-certificates.crt", cert_reqs=ssl.CERT_REQUIRED)
+			ss.connect((host, 443))
+			ss.write("GET " + path + " HTTP/1.1\r\nHost: "+ host + "\r\n\r\n")
+			strg = ss.recv(BLOCO)
+		else:
+			# Inicia a comunicacao, envia a requisicao e recebe o cabecalho
+			# mais o inicio do conteudo, se houver
+			try:
+
+				s = socket.create_connection((host, port), 10)
+				s.send("GET " + path + " HTTP/1.1\r\nHost: "+ host + "\r\n\r\n")
+				strg = s.recv(BLOCO)
+			
+			except socket.error:
+				msg += SinalizaErro()
+				houve_erro = True
+
+		#print "Passei [2]"
 
 		if not houve_erro:
 
@@ -158,16 +181,23 @@ def Busca(url, prof_atual):
 				# Define se a requisicao foi bem sucedida
 				codigo_retorno = int(cabecalho.split(" ", 2)[1])
 
-				# Verifica se o cabecalho disponibiliza o tamanho do
-				# conteudo
-				match = re.search(r'Content-Length: (\d+)', cabecalho)
-
+				match = re.search(r'Transfer-Encoding: chunked', cabecalho)
+				
 				if match:
-					tamanho_disponivel = True
-					tam = int(match.group(1))
-
+					chunked_encoding = True
 				else:
-					tamanho_disponivel = False
+					chunked_encoding = False
+
+					# Verifica se o cabecalho disponibiliza o tamanho do
+					# conteudo
+					match = re.search(r'Content-Length: (\d+)', cabecalho)
+
+					if match:
+						tamanho_disponivel = True
+						tam = int(match.group(1))
+
+					else:
+						tamanho_disponivel = False
 			
 			
 				if codigo_retorno == 200 or codigo_retorno == 300:
@@ -199,13 +229,80 @@ def Busca(url, prof_atual):
 					# Se houver indicacao explicita de content-length,
 					# ela deve ser respeitada. Senao, paramos quando o
 					# server para de mandar.
-					if tamanho_disponivel:
+											
+					if chunked_encoding:
+						#print "Site usa chunked encoding"
+						#print "Entrei [1]"
+						#print conteudo
+						temp = re.split(r'\r\n', conteudo, 1)
+						while (not temp[0]):
+							try:
+								if https:
+									conteudo += ss.recv(BLOCO)
+								else:
+									conteudo += s.recv(BLOCO)
+							except:
+								msg += SinalizaErro()
+								houve_erro = True
+								break
+							temp = re.split(r'\r\n', conteudo, 1)
+						bytes_para_ler = int(temp[0],16)
+						while bytes_para_ler > 0:
+							renomear_isso = temp[1]
+							while bytes_para_ler + 2 > len(renomear_isso):
+								try:
+									if https:
+										strg = ss.recv(BLOCO)
+									else:
+										strg = s.recv(BLOCO)
+									renomear_isso += strg
+								except:
+									msg += SinalizaErro()
+									houve_erro = True
+									break
+							#temp = re.split ('.{bytes_para_ler+2}', renomear_isso, re.DOTALL)
+							strg = renomear_isso[0:(bytes_para_ler+2)]
+							if (len(strg) < len(renomear_isso)):
+								resto = renomear_isso[(bytes_para_ler+2):(len(renomear_isso))]
+							else:
+								resto = ""
+							#strg = temp[0]
+							conteudo += strg
+							
+							#print strg
+							
+							if not DEBUG_FLAG:		# DEBUG
+								saida.write(strg)
+							if (not resto):
+								try:
+									if https:
+										strg = ss.recv(BLOCO)
+									else:
+										strg = s.recv(BLOCO)
+									resto += strg
+								except:
+									msg += SinalizaErro()
+									houve_erro = True
+									break
+								temp = re.split(r'\r\n', resto, 1)
+								bytes_para_ler = int(temp[0],16)
+							else:
+								#strg = temp[1]
+								temp = re.split(r'\r\n', resto, 1)
+								bytes_para_ler = int(temp[0],16)
+						
+							
+					elif tamanho_disponivel:
+						#print "Site usa content-length"
 						bytes_recebidos = len(conteudo)
 
 						while (bytes_recebidos < tam):
 
 							try:
-								strg = s.recv(BLOCO)
+								if https:
+									strg = ss.recv(BLOCO)
+								else:
+									strg = s.recv(BLOCO)
 								# print len(strg)
 								ultimo_br = bytes_recebidos
 								bytes_recebidos += len(strg)
@@ -223,12 +320,16 @@ def Busca(url, prof_atual):
 								break
 
 					else:
+						#print "Site nao usa nada"
 						tentativas = 5
 
 						while(tentativas > 0):
 
 							try:
-								strg = s.recv(BLOCO)
+								if https:
+									strg = ss.recv(BLOCO)
+								else:
+									strg = s.recv(BLOCO)
 								bytes_recebidos = (len(strg))
 								conteudo = conteudo + strg
 
@@ -247,6 +348,7 @@ def Busca(url, prof_atual):
 								tentativas = 5
 
 					# print conteudo
+					#print "Sai [1]"
 
 					if not DEBUG_FLAG:		# DEBUG
 						saida.close()
@@ -298,7 +400,10 @@ def Busca(url, prof_atual):
 					msg += '\t<resposta com codigo invalido>\n'
 					print msg
 						
-				s.close()
+				if https:
+					ss.close()
+				else:
+					s.close()
 	else:
 		lock.release()
 
@@ -312,6 +417,7 @@ def robots(url):
 
 	if not (parse.netloc in robots_visitados):
 		robots_visitados.append(parse.netloc)
+		scheme = parse.scheme
 
 		try:
 			if parse.port == None:
@@ -322,16 +428,35 @@ def robots(url):
 		except:
 			port = 80
 
+		if scheme == "https":
+			https = True
+		else:
+			https = False
+
 		msg = parse.netloc + '/robots.txt' + '\n'
 
-		try:
-			s = socket.create_connection((parse.netloc, port), 10)
-			s.send("GET /" + "/robots.txt" + " HTTP/1.1\r\nHost: "+ parse.netloc + "\r\n\r\n")
-			result = s.recv(BLOCO)
+		if https:
+			s = socket.socket()
+			ss = ssl.wrap_socket(s, ca_certs="ca-certificates.crt", cert_reqs=ssl.CERT_REQUIRED)
+			ss.connect((parse.netloc, 443))
+			ss.write("GET /" + "/robots.txt" + " HTTP/1.1\r\nHost: "+ parse.netloc + "\r\n\r\n")
+			result = ss.recv(BLOCO)
+		else:
 
-		except socket.error:
-			SinalizaErro()
-			houve_erro = True
+			try:
+				s = socket.create_connection((parse.netloc, port), 10)
+				s.send("GET /" + "/robots.txt" + " HTTP/1.1\r\nHost: "+ parse.netloc + "\r\n\r\n")
+				if https:
+					result = ss.recv(BLOCO)
+				else:
+					result = s.recv(BLOCO)
+
+			except socket.error:
+				SinalizaErro()
+				houve_erro = True
+			except ssl.SSLError:
+				SinalizaErro()
+				houve_erro = True
 
 		if houve_erro:
 			return
@@ -339,6 +464,12 @@ def robots(url):
 		resposta = re.match(r'(.*?)\n\r\n(.*)', result, re.DOTALL)
 		cabecalho = resposta.group(1)
 		conteudo = resposta.group(2)
+		
+		match = re.search(r'Transfer-Encoding: chunked', cabecalho)
+		if match:
+			chunked_encoding = True
+		else:
+			chunked_encoding = False
 
 		codigo_retorno = int(cabecalho.split(' ', 2)[1])
 
@@ -349,10 +480,62 @@ def robots(url):
 		if re_tamanho:
 			tam = int(re_tamanho.group(1))
 
-		if re_tamanho:
+		if chunked_encoding:
+			temp = re.split(r'\r\n', conteudo, 1)
+			bytes_para_ler = int(temp[0],16)
+			#print "Bytes para ler " + str(bytes_para_ler)
+			while bytes_para_ler > 0:
+				renomear_isso = temp[1]
+				#print "REnomear isso " + renomear_isso
+				while bytes_para_ler + 2 > len(renomear_isso):
+					try:
+						if https:
+							strg = ss.recv(BLOCO)
+						else:
+							strg = s.recv(BLOCO)
+						renomear_isso += strg
+					except:
+						msg += SinalizaErro()
+						houve_erro = True
+						break
+				#print "Passei o primeiro while"
+				strg = renomear_isso[0:(bytes_para_ler+2)]
+				if (len(strg) < len(renomear_isso)):
+					resto = renomear_isso[(bytes_para_ler+2):(len(renomear_isso))]
+				else:
+					resto = ""
+				
+				#print len(strg)
+				#print strg
+				conteudo += strg
+				if (not resto):
+					try:
+						if https:
+							strg = ss.recv(BLOCO)
+						else:
+							strg = s.recv(BLOCO)
+						resto += strg
+					except:
+						msg += SinalizaErro()
+						houve_erro = True
+						break
+					temp = re.split(r'\r\n', resto, 1)
+					bytes_para_ler = int(temp[0],16)
+					#print "Sai do IF"
+				else:
+					#print "Entrei no ELSE"
+					strg = resto
+					temp = re.split(r'\r\n', strg, 1)
+					bytes_para_ler = int(temp[0],16)
+					#print "Sai do ELSE"
+			#print "Voltei da iteracao"
+		elif re_tamanho:
 			while len(conteudo) < tam:
 				try:
-					result = s.recv(BLOCO)
+					if https:
+						result = ss.recv(BLOCO)
+					else:
+						result = s.recv(BLOCO)
 					conteudo += result
 				except:
 					SinalizaErro()
@@ -362,7 +545,10 @@ def robots(url):
 			tentativas = 5
 			while(tentativas > 0):
 				try:
-					result = s.recv(BLOCO)
+					if https:
+						result = ss.recv(BLOCO)
+					else:
+						result = s.recv(BLOCO)
 					conteudo += result
 					bytes_recebidos = len(result)
 				except:
@@ -385,30 +571,44 @@ def robots(url):
 				msg += 'robots.txt: ' + link + '\n'
 
 		print msg
+		
+		#print "Saindo do robots"
 
 def procura():
 
 	global nsites
 	global prof_atual
 
+	#print "Procura em [1]"
+
 	while True:
 
 		lock.acquire()
 
+		#print "Procura em [2]"
+
 		nsites_local = nsites
 		if nsites_local > 0:
 			url = lista_por_visitar.pop(0)
+			#print "URL " + url
 			parse = urlparse.urlparse(url)
+			#print "Parse.netloc " + parse.netloc
 			if not (parse.netloc in robots_visitados):
 				robots(url)
 			nsites -= 1
 
+		#print "Procura em [3]"
+
 		lock.release()
+		
+		#print "Procura em [4]"
 
 		if nsites_local > 0:
 			Busca(url, prof_atual)
 		else:
 			break
+
+	#print "Procura em [5]"
 
 
 def main(argc, argv):
@@ -416,10 +616,14 @@ def main(argc, argv):
 	global nsites
 	global prof_atual
 
+	#print "Main em [1]"
+
 	if argc != 3:
 		print "Numero de parametros incorreto"
 		print "Uso: python webcrawler.py <profundidade> <url>\n"
 		sys.exit()
+
+	#print "Main em [2]"
 
 	try:
 		profundidade = int(argv[1])
@@ -428,7 +632,11 @@ def main(argc, argv):
 		print "Uso: python webcrawler.py <profundidade> <url>\n"
 		sys.exit()
 
+	#print "Main em [3]"
+
 	URL_inicial = argv[2]
+	
+	#print "Main em [4]"
 
 	#Cria o diretorio que vai conter todos as outras pastas dos hrefs
 	os.system("mkdir webcrawler-output" + ' 2>> /dev/null')
@@ -437,11 +645,18 @@ def main(argc, argv):
 	if not(re.match(r'https?://', URL_inicial)):
 		URL_inicial = "http://" + URL_inicial
 
+	#print "Main em [5]"
+
 	lista_por_visitar.append(URL_inicial)
+
+	#print "Main em [6]"
 
 	while prof_atual <= profundidade:								# Profundidade
 		threads = []
 		nsites = len(lista_por_visitar)
+
+		#print "Main em [7]"
+
 
 		if nsites < NTHREADS:
 			nthreads = nsites
@@ -454,12 +669,16 @@ def main(argc, argv):
 			threads.append(t)
 			t.start()
 			k += 1
+			
+		#print "Main em [8]"
 
 		k = 0
 		while k < nthreads:
 			t = threads.pop()
 			t.join()
 			k += 1
+			
+		#print "Main em [9]"
 
 		prof_atual += 1
 
