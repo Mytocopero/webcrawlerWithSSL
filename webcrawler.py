@@ -7,12 +7,14 @@ import os
 from threading import *
 import ssl
 
+import pprint
+
 # FLAGS PARA DEBUG
 
 # SEM ESCRITA
 # Quando ela eh True, nenhum arquivo ou diretorio eh criado.
 # Adicionalmente, mensagens de erro mais completas sao mostradas.
-DEBUG_FLAG = False
+DEBUG_FLAG = True
 
 # IMPRIME CABECALHO
 # Quando ela eh True, o cabecalho obtido como resposta eh mostrado abaixo do
@@ -146,8 +148,42 @@ def Busca(url, prof_atual):
 
 		if https:
 			s = socket.socket()
-			ss = ssl.wrap_socket(s, ca_certs="ca-certificates.crt", cert_reqs=ssl.CERT_REQUIRED)
+			#try:
+			#	cert = ssl.get_server_certificate((host, 443))
+			#	certfile = open("temp.pem", 'w')
+			#	certfile.write(cert)
+			#	certfile.close()
+			#	os.system ('openssl verify -CAfile temp.pem temp.pem')
+			#except:
+			#	print "Nao foi possivel obter o certificado do servidor."
+			ss = ssl.wrap_socket(s, ca_certs="ca-certificates.crt", cert_reqs=ssl.CERT_NONE)
 			ss.connect((host, 443))
+			#cert = ssl.get_server_certificate((host,443))
+			cert = ss.getpeercert(True)
+			cert = ssl.DER_cert_to_PEM_cert(cert)
+			if cert:
+				lock.acquire()
+				certfile = open("temp.pem", 'w')
+				certfile.write(cert)
+				certfile.close()
+				os.system("openssl x509 -in temp.pem -text -noout > temp2.pem")
+				#os.system ('openssl verify -CAfile temp2.pem temp2.pem')
+				certfile_decodificada = open("temp2.pem", 'r')
+				cert = certfile_decodificada.read()
+				certfile_decodificada.close()
+				os.system ('rm temp.pem temp2.pem')
+				lock.release()
+				match1 = re.search(r"\s*?Issuer:.*?O=(.*?),", cert, re.DOTALL)
+				if match1:
+					issuer = match1.group(1)
+					msg += "\tEmitido por: " + issuer + "\n"
+				match2 = re.search(r"\s*?Subject:.*?O=(.*?),", cert, re.DOTALL)
+				if match2:
+					subject = match2.group(1)
+					msg += "\tEmitido para: " + subject + "\n"
+				if match1 and match2 and (issuer == subject):
+					msg += "\t(o certificado eh auto-assinado)" + "\n"
+
 			ss.write("GET " + path + " HTTP/1.1\r\nHost: "+ host + "\r\n\r\n")
 			strg = ss.recv(BLOCO)
 		else:
@@ -437,7 +473,7 @@ def robots(url):
 
 		if https:
 			s = socket.socket()
-			ss = ssl.wrap_socket(s, ca_certs="ca-certificates.crt", cert_reqs=ssl.CERT_REQUIRED)
+			ss = ssl.wrap_socket(s, ca_certs="ca-certificates.crt", cert_reqs=ssl.CERT_NONE)
 			ss.connect((parse.netloc, 443))
 			ss.write("GET /" + "/robots.txt" + " HTTP/1.1\r\nHost: "+ parse.netloc + "\r\n\r\n")
 			result = ss.recv(BLOCO)
