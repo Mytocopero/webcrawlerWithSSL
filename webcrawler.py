@@ -7,21 +7,20 @@ import os
 from threading import *
 import ssl
 
-import pprint
 
 # FLAGS PARA DEBUG
 
 # SEM ESCRITA
 # Quando ela eh True, nenhum arquivo ou diretorio eh criado.
 # Adicionalmente, mensagens de erro mais completas sao mostradas.
-DEBUG_FLAG = True
+DEBUG_FLAG = False
 
 # IMPRIME CABECALHO
 # Quando ela eh True, o cabecalho obtido como resposta eh mostrado abaixo do
 # endereco do site
 IMPRIME_CABECALHO = False
 
-NTHREADS = 1
+NTHREADS = 8
 BLOCO = 2048
 
 def SinalizaErro():
@@ -103,7 +102,6 @@ def CriaDiretorios(host, path, criar):
 
 def Busca(url, prof_atual):
 
-	#print "Passei [-1]"
 
 	global lista_por_visitar
 
@@ -127,8 +125,6 @@ def Busca(url, prof_atual):
 	lock.acquire()
 	if not (addr in lista_visitados):
 
-		#print "Passei [0]"
-
 		lista_visitados.append(addr)
 		lock.release()
 
@@ -144,48 +140,40 @@ def Busca(url, prof_atual):
 		if not path:
 			path = '/'
 
-		#print "Passei [1]"
 
 		if https:
-			s = socket.socket()
-			#try:
-			#	cert = ssl.get_server_certificate((host, 443))
-			#	certfile = open("temp.pem", 'w')
-			#	certfile.write(cert)
-			#	certfile.close()
-			#	os.system ('openssl verify -CAfile temp.pem temp.pem')
-			#except:
-			#	print "Nao foi possivel obter o certificado do servidor."
-			ss = ssl.wrap_socket(s, ca_certs="ca-certificates.crt", cert_reqs=ssl.CERT_NONE)
-			ss.connect((host, 443))
-			#cert = ssl.get_server_certificate((host,443))
-			cert = ss.getpeercert(True)
-			cert = ssl.DER_cert_to_PEM_cert(cert)
-			if cert:
-				lock.acquire()
-				certfile = open("temp.pem", 'w')
-				certfile.write(cert)
-				certfile.close()
-				os.system("openssl x509 -in temp.pem -text -noout > temp2.pem")
-				#os.system ('openssl verify -CAfile temp2.pem temp2.pem')
-				certfile_decodificada = open("temp2.pem", 'r')
-				cert = certfile_decodificada.read()
-				certfile_decodificada.close()
-				os.system ('rm temp.pem temp2.pem')
-				lock.release()
-				match1 = re.search(r"\s*?Issuer:.*?O=(.*?),", cert, re.DOTALL)
-				if match1:
-					issuer = match1.group(1)
-					msg += "\tEmitido por: " + issuer + "\n"
-				match2 = re.search(r"\s*?Subject:.*?O=(.*?),", cert, re.DOTALL)
-				if match2:
-					subject = match2.group(1)
-					msg += "\tEmitido para: " + subject + "\n"
-				if match1 and match2 and (issuer == subject):
-					msg += "\t(o certificado eh auto-assinado)" + "\n"
+			try:
+				s = socket.socket()
+				ss = ssl.wrap_socket(s, cert_reqs=ssl.CERT_NONE)
+				ss.connect((host, 443))
+				cert = ss.getpeercert(True)
+				cert = ssl.DER_cert_to_PEM_cert(cert)
+				if cert:
+					thr = current_thread()
+					certfile = open("temp" + thr.name + ".pem", 'w')
+					certfile.write(cert)
+					certfile.close()
+					os.system("openssl x509 -in temp" + thr.name + ".pem -text -noout > temp2" + thr.name + ".pem")
+					certfile_decodificada = open("temp2" + thr.name + ".pem", 'r')
+					cert = certfile_decodificada.read()
+					certfile_decodificada.close()
+					os.system ('rm temp' + thr.name + '.pem temp2' + thr.name + '.pem')
+					match1 = re.search(r"\s*?Issuer:.*?O=(.*?),", cert, re.DOTALL)
+					if match1:
+						issuer = match1.group(1)
+						msg += "\tEmitido por: " + issuer + "\n"
+					match2 = re.search(r"\s*?Subject:.*?O=(.*?),", cert, re.DOTALL)
+					if match2:
+						subject = match2.group(1)
+						msg += "\tEmitido para: " + subject + "\n"
+					if match1 and match2 and (issuer == subject):
+						msg += "\t(Certificado auto-assinado)" + "\n"
 
-			ss.write("GET " + path + " HTTP/1.1\r\nHost: "+ host + "\r\n\r\n")
-			strg = ss.recv(BLOCO)
+				ss.write("GET " + path + " HTTP/1.1\r\nHost: "+ host + "\r\n\r\n")
+				strg = ss.recv(BLOCO)
+			except:
+				msg += SinalizaErro()
+				houve_erro = True
 		else:
 			# Inicia a comunicacao, envia a requisicao e recebe o cabecalho
 			# mais o inicio do conteudo, se houver
@@ -199,7 +187,6 @@ def Busca(url, prof_atual):
 				msg += SinalizaErro()
 				houve_erro = True
 
-		#print "Passei [2]"
 
 		if not houve_erro:
 
@@ -267,9 +254,6 @@ def Busca(url, prof_atual):
 					# server para de mandar.
 											
 					if chunked_encoding:
-						#print "Site usa chunked encoding"
-						#print "Entrei [1]"
-						#print conteudo
 						temp = re.split(r'\r\n', conteudo, 1)
 						while (not temp[0]):
 							try:
@@ -296,17 +280,12 @@ def Busca(url, prof_atual):
 									msg += SinalizaErro()
 									houve_erro = True
 									break
-							#temp = re.split ('.{bytes_para_ler+2}', renomear_isso, re.DOTALL)
 							strg = renomear_isso[0:(bytes_para_ler+2)]
 							if (len(strg) < len(renomear_isso)):
 								resto = renomear_isso[(bytes_para_ler+2):(len(renomear_isso))]
 							else:
 								resto = ""
-							#strg = temp[0]
-							conteudo += strg
-							
-							#print strg
-							
+							conteudo += strg				
 							if not DEBUG_FLAG:		# DEBUG
 								saida.write(strg)
 							if (not resto):
@@ -323,13 +302,12 @@ def Busca(url, prof_atual):
 								temp = re.split(r'\r\n', resto, 1)
 								bytes_para_ler = int(temp[0],16)
 							else:
-								#strg = temp[1]
 								temp = re.split(r'\r\n', resto, 1)
 								bytes_para_ler = int(temp[0],16)
 						
 							
 					elif tamanho_disponivel:
-						#print "Site usa content-length"
+						# "Site usa content-length"
 						bytes_recebidos = len(conteudo)
 
 						while (bytes_recebidos < tam):
@@ -339,7 +317,6 @@ def Busca(url, prof_atual):
 									strg = ss.recv(BLOCO)
 								else:
 									strg = s.recv(BLOCO)
-								# print len(strg)
 								ultimo_br = bytes_recebidos
 								bytes_recebidos += len(strg)
 								conteudo = conteudo + strg
@@ -356,7 +333,6 @@ def Busca(url, prof_atual):
 								break
 
 					else:
-						#print "Site nao usa nada"
 						tentativas = 5
 
 						while(tentativas > 0):
@@ -383,8 +359,6 @@ def Busca(url, prof_atual):
 							else:
 								tentativas = 5
 
-					# print conteudo
-					#print "Sai [1]"
 
 					if not DEBUG_FLAG:		# DEBUG
 						saida.close()
@@ -472,11 +446,15 @@ def robots(url):
 		msg = parse.netloc + '/robots.txt' + '\n'
 
 		if https:
-			s = socket.socket()
-			ss = ssl.wrap_socket(s, ca_certs="ca-certificates.crt", cert_reqs=ssl.CERT_NONE)
-			ss.connect((parse.netloc, 443))
-			ss.write("GET /" + "/robots.txt" + " HTTP/1.1\r\nHost: "+ parse.netloc + "\r\n\r\n")
-			result = ss.recv(BLOCO)
+			try:
+				s = socket.socket()
+				ss = ssl.wrap_socket(s, ca_certs="ca-certificates.crt", cert_reqs=ssl.CERT_NONE)
+				ss.connect((parse.netloc, 443))
+				ss.write("GET /" + "/robots.txt" + " HTTP/1.1\r\nHost: "+ parse.netloc + "\r\n\r\n")
+				result = ss.recv(BLOCO)
+			except:
+				SinalizaErro()
+				houve_erro = True
 		else:
 
 			try:
@@ -519,10 +497,8 @@ def robots(url):
 		if chunked_encoding:
 			temp = re.split(r'\r\n', conteudo, 1)
 			bytes_para_ler = int(temp[0],16)
-			#print "Bytes para ler " + str(bytes_para_ler)
 			while bytes_para_ler > 0:
 				renomear_isso = temp[1]
-				#print "REnomear isso " + renomear_isso
 				while bytes_para_ler + 2 > len(renomear_isso):
 					try:
 						if https:
@@ -534,15 +510,13 @@ def robots(url):
 						msg += SinalizaErro()
 						houve_erro = True
 						break
-				#print "Passei o primeiro while"
+
 				strg = renomear_isso[0:(bytes_para_ler+2)]
 				if (len(strg) < len(renomear_isso)):
 					resto = renomear_isso[(bytes_para_ler+2):(len(renomear_isso))]
 				else:
 					resto = ""
 				
-				#print len(strg)
-				#print strg
 				conteudo += strg
 				if (not resto):
 					try:
@@ -557,14 +531,10 @@ def robots(url):
 						break
 					temp = re.split(r'\r\n', resto, 1)
 					bytes_para_ler = int(temp[0],16)
-					#print "Sai do IF"
 				else:
-					#print "Entrei no ELSE"
 					strg = resto
 					temp = re.split(r'\r\n', strg, 1)
 					bytes_para_ler = int(temp[0],16)
-					#print "Sai do ELSE"
-			#print "Voltei da iteracao"
 		elif re_tamanho:
 			while len(conteudo) < tam:
 				try:
@@ -608,43 +578,34 @@ def robots(url):
 
 		print msg
 		
-		#print "Saindo do robots"
+
 
 def procura():
 
 	global nsites
 	global prof_atual
 
-	#print "Procura em [1]"
-
 	while True:
 
 		lock.acquire()
 
-		#print "Procura em [2]"
-
 		nsites_local = nsites
 		if nsites_local > 0:
 			url = lista_por_visitar.pop(0)
-			#print "URL " + url
 			parse = urlparse.urlparse(url)
-			#print "Parse.netloc " + parse.netloc
 			if not (parse.netloc in robots_visitados):
 				robots(url)
 			nsites -= 1
 
-		#print "Procura em [3]"
 
 		lock.release()
 		
-		#print "Procura em [4]"
 
 		if nsites_local > 0:
 			Busca(url, prof_atual)
 		else:
 			break
 
-	#print "Procura em [5]"
 
 
 def main(argc, argv):
@@ -652,14 +613,12 @@ def main(argc, argv):
 	global nsites
 	global prof_atual
 
-	#print "Main em [1]"
 
 	if argc != 3:
 		print "Numero de parametros incorreto"
 		print "Uso: python webcrawler.py <profundidade> <url>\n"
 		sys.exit()
 
-	#print "Main em [2]"
 
 	try:
 		profundidade = int(argv[1])
@@ -668,11 +627,9 @@ def main(argc, argv):
 		print "Uso: python webcrawler.py <profundidade> <url>\n"
 		sys.exit()
 
-	#print "Main em [3]"
 
 	URL_inicial = argv[2]
 	
-	#print "Main em [4]"
 
 	#Cria o diretorio que vai conter todos as outras pastas dos hrefs
 	os.system("mkdir webcrawler-output" + ' 2>> /dev/null')
@@ -681,17 +638,14 @@ def main(argc, argv):
 	if not(re.match(r'https?://', URL_inicial)):
 		URL_inicial = "http://" + URL_inicial
 
-	#print "Main em [5]"
 
 	lista_por_visitar.append(URL_inicial)
 
-	#print "Main em [6]"
 
 	while prof_atual <= profundidade:								# Profundidade
 		threads = []
 		nsites = len(lista_por_visitar)
 
-		#print "Main em [7]"
 
 
 		if nsites < NTHREADS:
@@ -705,16 +659,14 @@ def main(argc, argv):
 			threads.append(t)
 			t.start()
 			k += 1
-			
-		#print "Main em [8]"
+					
 
 		k = 0
 		while k < nthreads:
 			t = threads.pop()
 			t.join()
 			k += 1
-			
-		#print "Main em [9]"
+				
 
 		prof_atual += 1
 
